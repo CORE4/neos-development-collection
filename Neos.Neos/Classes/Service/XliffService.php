@@ -14,13 +14,10 @@ namespace Neos\Neos\Service;
 use Neos\Flow\Annotations as Flow;
 use Neos\Cache\Frontend\VariableFrontend;
 use Neos\Error\Messages\Result;
-use Neos\Flow\I18n\Exception;
-use Neos\Flow\I18n\Xliff\XliffParser;
+use Neos\Flow\I18n;
 use Neos\Flow\Package\PackageManagerInterface;
 use Neos\Utility\Arrays;
 use Neos\Utility\Files;
-use Neos\Flow\I18n\Locale;
-use Neos\Flow\I18n\Service as LocalizationService;
 use Neos\Utility\Unicode\Functions as UnicodeFunctions;
 
 /**
@@ -39,13 +36,7 @@ class XliffService
 
     /**
      * @Flow\Inject
-     * @var XliffParser
-     */
-    protected $xliffParser;
-
-    /**
-     * @Flow\Inject
-     * @var LocalizationService
+     * @var I18n\Service
      */
     protected $localizationService;
 
@@ -54,6 +45,12 @@ class XliffService
      * @var VariableFrontend
      */
     protected $xliffToJsonTranslationsCache;
+
+    /**
+     * @Flow\Inject
+     * @var I18n\Xliff\Service\XliffFileProvider
+     */
+    protected $xliffFileProvider;
 
     /**
      * @Flow\InjectConfiguration(path="userInterface.scrambleTranslatedLabels", package="Neos.Neos")
@@ -77,11 +74,11 @@ class XliffService
      * Return the json array for a given locale, sourceCatalog, xliffPath and package.
      * The json will be cached.
      *
-     * @param Locale $locale The locale
+     * @param I18n\Locale $locale The locale
      * @return Result
-     * @throws Exception
+     * @throws I18n\Exception
      */
-    public function getCachedJson(Locale $locale)
+    public function getCachedJson(I18n\Locale $locale)
     {
         $cacheIdentifier = md5($locale);
 
@@ -108,7 +105,8 @@ class XliffService
                         foreach (glob($localeSourcePath . $sourceName . '.xlf') as $xliffPathAndFilename) {
                             $xliffPathInfo = pathinfo($xliffPathAndFilename);
                             $sourceName = str_replace($localeSourcePath, '', $xliffPathInfo['dirname'] . '/' . $xliffPathInfo['filename']);
-                            $labels = Arrays::arrayMergeRecursiveOverrule($labels, $this->parseXliffToArray($xliffPathAndFilename, $packageKey, $sourceName));
+                            $fileId = $packageKey . ':' . $sourceName;
+                            $labels = Arrays::arrayMergeRecursiveOverrule($labels, $this->parseXliffToArray($fileId, $allowedLocale));
                         }
                     }
                 }
@@ -124,26 +122,22 @@ class XliffService
     /**
      * Read the xliff file and create the desired json
      *
-     * @param string $xliffPathAndFilename The file to read
-     * @param string $packageKey
-     * @param string $sourceName
+     * @param string $fileId
+     * @param I18n\Locale $locale
      * @return array
-     *
-     * @todo remove the override handling once Flow takes care of that, see FLOW-61
      */
-    public function parseXliffToArray($xliffPathAndFilename, $packageKey, $sourceName)
+    public function parseXliffToArray(string $fileId, I18n\Locale $locale)
     {
-        /** @var array $parsedData */
-        $parsedData = $this->xliffParser->getParsedData($xliffPathAndFilename);
-        $arrayData = array();
-        foreach ($parsedData['translationUnits'] as $key => $value) {
+        $file = $this->xliffFileProvider->getFile($fileId, $locale);
+        $arrayData = [];
+        foreach ($file->getTranslationUnits() as $key => $value) {
             $valueToStore = !empty($value[0]['target']) ? $value[0]['target'] : $value[0]['source'];
 
             if ($this->scrambleTranslatedLabels) {
                 $valueToStore = str_repeat('#', UnicodeFunctions::strlen($valueToStore));
             }
 
-            $this->setArrayDataValue($arrayData, str_replace('.', '_', $packageKey) . '.' . str_replace('/', '_', $sourceName) . '.' . str_replace('.', '_', $key), $valueToStore);
+            $this->setArrayDataValue($arrayData, str_replace(['.', ':', '/'], ['_', '.', '_'], $fileId) . '.' . str_replace('.', '_', $key), $valueToStore);
         }
 
         return $arrayData;
